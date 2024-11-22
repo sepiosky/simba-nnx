@@ -1,44 +1,21 @@
 from typing import Any
 
-import flax.linen as nn
+from flax import nnx
 import jax.numpy as jnp
 
-from scale_rl.networks.utils import he_normal_init, orthogonal_init
+class MLPBlock(nnx.Module):
+    def __init__(self, din: int, dmid: int, dout: int, dtype: int, *, rngs: nnx.Rngs):
+        self.linear1 = nnx.Linear(din, dmid, dtype=dtype, rngs=rngs)
+        self.linear2 = nnx.Linear(dmid, dout, dtype=dtype, rngs=rngs)
 
-
-class MLPBlock(nn.Module):
-    hidden_dim: int
-    dtype: Any
-
-    @nn.compact
     def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
-        # sqrt(2) is recommended when using with ReLU activation.
-        x = nn.Dense(
-            self.hidden_dim,
-            kernel_init=orthogonal_init(jnp.sqrt(2)),
-            dtype=self.dtype,
-        )(x)
-        x = nn.relu(x)
-        x = nn.Dense(
-            self.hidden_dim,
-            kernel_init=orthogonal_init(jnp.sqrt(2)),
-            dtype=self.dtype,
-        )(x)
-        x = nn.relu(x)
-        return x
+        return nnx.relu(self.linear2(nnx.relu(self.linear1(x))))
 
+class ResidualBlock(nnx.Module):
+    def __init__(self, din: int, dmid: int, dout:int, dtype: int, *, rngs: nnx.Rngs):
+        self.layernorm = nnx.LayerNorm(num_features=din, rngs=rngs, dtype=dtype)
+        self.linear1 = nnx.Linear(din, dmid * 4, dtype=dtype, rngs=rngs)
+        self.linear2 = nnx.Linear(dmid * 4, dout, dtype=dtype, rngs=rngs)
 
-class ResidualBlock(nn.Module):
-    hidden_dim: int
-    dtype: Any
-
-    @nn.compact
     def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
-        res = x
-        x = nn.LayerNorm(dtype=self.dtype)(x)
-        x = nn.Dense(
-            self.hidden_dim * 4, kernel_init=he_normal_init(), dtype=self.dtype
-        )(x)
-        x = nn.relu(x)
-        x = nn.Dense(self.hidden_dim, kernel_init=he_normal_init(), dtype=self.dtype)(x)
-        return res + x
+        return x + self.linear2(nnx.relu(self.linear1(self.layernorm(x))))

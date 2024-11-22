@@ -5,60 +5,40 @@ from typing import Any
 
 import jax
 import jax.numpy as jnp
-from flax import linen as nn
+from flax import nnx
 
 from scale_rl.networks.utils import orthogonal_init
 
 
-class LinearCritic(nn.Module):
-    kernel_init_scale: float = 1.0
-    dtype: Any = jnp.float32
+class LinearCritic(nnx.Module):
+    def __init__(self, din: int, dtype: int = jnp.float32, *, rngs: nnx.Rngs):
+        self.linear = nnx.Linear(din, 1, dtype=dtype, rngs=rngs)
 
-    @nn.compact
-    def __call__(self, inputs: jnp.ndarray) -> jnp.ndarray:
-        value = nn.Dense(
-            1, kernel_init=orthogonal_init(self.kernel_init_scale), dtype=self.dtype
-        )(inputs)
-        return value
+    def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
+        return self.linear(x)
 
 
-class CategoricalCritic(nn.Module):
+class CategoricalCritic(nnx.Module):
     """
     C51: https://arxiv.org/pdf/1707.06887
     """
+    def __init__(self, din: int, num_bins: int = 51, dtype: int = jnp.float32, *, rngs: nnx.Rngs):
+        self.linear = nnx.Linear(din, num_bins, dtype=dtype, rngs=rngs)
 
-    kernel_init_scale: float = 1.0
-    num_bins: int = 51
-    dtype: Any = jnp.float32
-
-    @nn.compact
-    def __call__(self, inputs: jnp.ndarray) -> jnp.ndarray:
-        value = nn.Dense(
-            self.num_bins,
-            kernel_init=orthogonal_init(self.kernel_init_scale),
-            dtype=self.dtype,
-        )(inputs)
-        # return log probability of bins
-        return jax.nn.log_softmax(value, axis=1)
+    def __call__(self, inputs: jnp.ndarray) -> jnp.ndarray:        # return log probability of bins
+        return jax.nnx.log_softmax(self.linear(inputs), axis=1)
 
 
-class QuantileRegressionCritic(nn.Module):
+class QuantileRegressionCritic(nnx.Module):
     """
     QR-Qnet: https://arxiv.org/pdf/1806.06923
     """
 
-    kernel_init_scale: float = 1.0
-    num_quantiles: int = 32
-    dtype: Any = jnp.float32
+    def __init__(self, din: int, num_quantiles: int = 32, dtype: int = jnp.float32, *, rngs: nnx.Rngs):
+        self.linear = nnx.Linear(din, num_quantiles, dtype=dtype, rngs=rngs)
 
-    @nn.compact
     def __call__(self, inputs: jnp.ndarray) -> jnp.ndarray:
-        value = nn.Dense(
-            self.num_quantiles,
-            kernel_init=orthogonal_init(self.kernel_init_scale),
-            dtype=self.dtype,
-        )(inputs)
-        return value
+        return self.linear(inputs)
 
 
 def compute_categorical_bin_values(
