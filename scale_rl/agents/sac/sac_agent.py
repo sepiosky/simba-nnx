@@ -8,6 +8,7 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 from flax.training import dynamic_scale
+from flax import nnx
 
 from scale_rl.agents.base_agent import BaseAgent
 from scale_rl.agents.sac.sac_network import (
@@ -77,8 +78,8 @@ def _init_sac_networks(
     action_dim: int,
     cfg: SACConfig,
 ) -> Tuple[PRNGKey, Trainer, Trainer, Trainer, Trainer]:
-    fake_observations = jnp.zeros((1, observation_dim))
-    fake_actions = jnp.zeros((1, action_dim))
+    # fake_observations = jnp.zeros((1, observation_dim))
+    # fake_actions = jnp.zeros((1, action_dim))
 
     rng = jax.random.PRNGKey(cfg.seed)
     rng, actor_key, critic_key, temp_key = jax.random.split(rng, 4)
@@ -86,14 +87,14 @@ def _init_sac_networks(
 
     # When initializing the network in the flax.nn.Module class, rng_key should be passed as rngs.
     actor = Trainer.create(
-        network_def=SACActor(
+        model=SACActor(
             block_type=cfg.actor_block_type,
             num_blocks=cfg.actor_num_blocks,
             hidden_dim=cfg.actor_hidden_dim,
             action_dim=action_dim,
             dtype=compute_dtype,
+            rngs=nnx.Rngs(actor_key)
         ),
-        network_inputs={"rngs": actor_key, "observations": fake_observations},
         tx=optax.adamw(
             learning_rate=cfg.actor_learning_rate,
             weight_decay=cfg.actor_weight_decay,
@@ -107,6 +108,14 @@ def _init_sac_networks(
             num_blocks=cfg.critic_num_blocks,
             hidden_dim=cfg.critic_hidden_dim,
             dtype=compute_dtype,
+            rngs=nnx.Rngs(critic_key)
+        )
+        target_network_def = SACClippedDoubleCritic(
+            block_type=cfg.critic_block_type,
+            num_blocks=cfg.critic_num_blocks,
+            hidden_dim=cfg.critic_hidden_dim,
+            dtype=compute_dtype,
+            rngs=nnx.Rngs(critic_key)
         )
     else:
         critic_network_def = SACCritic(
@@ -114,15 +123,18 @@ def _init_sac_networks(
             num_blocks=cfg.critic_num_blocks,
             hidden_dim=cfg.critic_hidden_dim,
             dtype=compute_dtype,
+            rngs=nnx.Rngs(critic_key)
+        )
+        target_network_def = SACCritic(
+            block_type=cfg.critic_block_type,
+            num_blocks=cfg.critic_num_blocks,
+            hidden_dim=cfg.critic_hidden_dim,
+            dtype=compute_dtype,
+            rngs=nnx.Rngs(critic_key)
         )
 
     critic = Trainer.create(
-        network_def=critic_network_def,
-        network_inputs={
-            "rngs": critic_key,
-            "observations": fake_observations,
-            "actions": fake_actions,
-        },
+        model=critic_network_def,
         tx=optax.adamw(
             learning_rate=cfg.critic_learning_rate,
             weight_decay=cfg.critic_weight_decay,
@@ -131,22 +143,13 @@ def _init_sac_networks(
     )
 
     # we set target critic's parameters identical to critic by using same rng.
-    target_network_def = critic_network_def
     target_critic = Trainer.create(
-        network_def=target_network_def,
-        network_inputs={
-            "rngs": critic_key,
-            "observations": fake_observations,
-            "actions": fake_actions,
-        },
+        model=target_network_def,
         tx=None,
     )
 
     temperature = Trainer.create(
-        network_def=SACTemperature(cfg.temp_initial_value),
-        network_inputs={
-            "rngs": temp_key,
-        },
+        model=SACTemperature(cfg.temp_initial_value, nnx.Rngs(temp_key)),
         tx=optax.adamw(
             learning_rate=cfg.temp_learning_rate,
             weight_decay=cfg.temp_weight_decay,

@@ -40,12 +40,9 @@ class Trainer:
         dynamic_scale: Optional[dynamic_scale_lib.DynamicScale] = None,
     ) -> "Trainer":
 
-        model = model
-        optimizer = None if tx is None else nnx.Optimizer(model, tx)
-
         network = cls(
             model=model,
-            optimizer=optimizer,
+            optimizer=None if tx is None else nnx.Optimizer(model, tx),
             dynamic_scale=dynamic_scale,
         )
 

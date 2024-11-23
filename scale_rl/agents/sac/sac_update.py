@@ -1,6 +1,7 @@
 from typing import Any, Dict, Tuple
 
 import flax
+from flax import nnx
 import jax
 import jax.numpy as jnp
 
@@ -17,13 +18,8 @@ def update_actor(
     batch: Batch,
     critic_use_cdq: bool,
 ) -> Tuple[Trainer, Dict[str, float]]:
-    def actor_loss_fn(
-        actor_params: flax.core.FrozenDict[str, Any],
-    ) -> Tuple[jnp.ndarray, Dict[str, float]]:
-        dist = actor.apply(
-            variables={"params": actor_params},
-            observations=batch["observation"],
-        )
+    def actor_loss_fn(actor: nnx.Module) -> Tuple[jnp.ndarray, Dict[str, float]]:
+        dist = actor(observations=batch["observation"])
 
         actions = dist.sample(seed=key)
         log_probs = dist.log_prob(actions)
@@ -36,6 +32,7 @@ def update_actor(
             q = q.reshape(-1)  # (n, 1) -> (n, )
 
         actor_loss = (log_probs * temperature() - q).mean()
+        _, actor_params, _ = nnx.split(actor, nnx.Param, ...)
         actor_info = {
             "actor_loss": actor_loss,
             "entropy": -log_probs.mean(),  # not exactly entropy, just calculating randomness
@@ -45,7 +42,7 @@ def update_actor(
 
         return actor_loss, actor_info
 
-    actor, info = actor.apply_gradient(actor_loss_fn)
+    info = actor.apply_gradient(actor_loss_fn)
     info["actor_gnorm"] = info.pop("grad_norm")
 
     return actor, info
@@ -84,32 +81,23 @@ def update_critic(
         (gamma**n_step) * (1 - batch["terminated"]) * temperature() * next_log_probs
     )
 
-    def critic_loss_fn(
-        critic_params: flax.core.FrozenDict[str, Any],
-    ) -> Tuple[jnp.ndarray, Dict[str, float]]:
+    def critic_loss_fn(critic: nnx.Module) -> Tuple[jnp.ndarray, Dict[str, float]]:
         # compute predicted q-value
         if critic_use_cdq:
-            pred_q1, pred_q2 = critic.apply(
-                variables={"params": critic_params},
-                observations=batch["observation"],
-                actions=batch["action"],
-            )
+            pred_q1, pred_q2 = critic.apply(observations=batch["observation"], actions=batch["action"])
             pred_q1 = pred_q1.reshape(-1)
             pred_q2 = pred_q2.reshape(-1)
 
             # compute mse loss
             critic_loss = ((pred_q1 - target_q) ** 2 + (pred_q2 - target_q) ** 2).mean()
         else:
-            pred_q = critic.apply(
-                variables={"params": critic_params},
-                observations=batch["observation"],
-                actions=batch["action"],
-            ).reshape(-1)
+            pred_q = critic(observations=batch["observation"], actions=batch["action"]).reshape(-1)
             pred_q1 = pred_q2 = pred_q
 
             # compute mse loss
             critic_loss = ((pred_q - target_q) ** 2).mean()
 
+        _, critic_params, _ = nnx.split(critic, nnx.Param, ...) #TODO watchout critic is trainer not model
         critic_info = {
             "critic_loss": critic_loss,
             "q1_mean": pred_q1.mean(),
@@ -120,7 +108,7 @@ def update_critic(
 
         return critic_loss, critic_info
 
-    critic, info = critic.apply_gradient(critic_loss_fn)
+    info = critic.apply_gradient(critic_loss_fn)
     info["critic_gnorm"] = info.pop("grad_norm")
 
     return critic, info
@@ -131,13 +119,15 @@ def update_target_network(
     target_network: Trainer,
     target_tau: float,
 ) -> Tuple[Trainer, Dict[str, float]]:
+    networkgraph, network_params, network_others = nnx.split(network, nnx.Param, ...) #TODO watchout network is trainer not model
+    targetgraph, target_params, target_others = nnx.split(target_network, nnx.Param, ...) #TODO watchout target_network is trainer not model
     new_target_params = jax.tree_map(
         lambda p, tp: p * target_tau + tp * (1 - target_tau),
-        network.params,
-        target_network.params,
+        network_params,
+        target_params,
     )
 
-    target_network = target_network.replace(params=new_target_params)
+    target_network = nnx.merge(targetgraph, new_target_params, target_others)
     info = {}
 
     return target_network, info
@@ -146,10 +136,8 @@ def update_target_network(
 def update_temperature(
     temperature: Trainer, entropy: float, target_entropy: float
 ) -> Tuple[Trainer, Dict[str, float]]:
-    def temperature_loss_fn(
-        temperature_params: flax.core.FrozenDict[str, Any],
-    ) -> Tuple[jnp.ndarray, Dict[str, float]]:
-        temperature_value = temperature.apply({"params": temperature_params})
+    def temperature_loss_fn(temperature_model: nnx.Module) -> Tuple[jnp.ndarray, Dict[str, float]]:
+        temperature_value = temperature_model()
         temperature_loss = temperature_value * (entropy - target_entropy).mean()
         temperature_info = {
             "temperature": temperature_value,
@@ -158,7 +146,7 @@ def update_temperature(
 
         return temperature_loss, temperature_info
 
-    temperature, info = temperature.apply_gradient(temperature_loss_fn)
+    info = temperature.apply_gradient(temperature_loss_fn)
     info["temperature_gnorm"] = info.pop("grad_norm")
 
     return temperature, info

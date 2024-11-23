@@ -1,6 +1,6 @@
 from typing import Any
 
-import flax.linen as nn
+from flax import nnx
 import jax.numpy as jnp
 from jax.lax import convert_element_type
 from tensorflow_probability.substrates import jax as tfp
@@ -10,73 +10,65 @@ from scale_rl.networks.layers import MLPBlock, ResidualBlock
 from scale_rl.networks.policies import NormalTanhPolicy
 from scale_rl.networks.utils import orthogonal_init
 
-tfd = tfp.distributions
-tfb = tfp.bijectors
+class SACEncoder(nnx.Module):
+    def __init__(self, block_type: str, num_blocks: int, hidden_dim: int, dtype: Any = jnp.float32, *, rngs: nnx.Rngs):
+        if block_type == "mlp":
+            self.layers = [
+                MLPBlock(hidden_dim, dtype=dtype, rngs=rngs)
+            ]
+        else:
+            self.layers = [
+                nnx.Linear(hidden_dim, dtype=dtype, rngs=rngs),
+                *[ResidualBlock(hidden_dim, dtype=dtype, rngs=rngs) for _ in range(num_blocks)],
+                nnx.LayerNorm(dtype=dtype, rngs=rngs)
+            ]
 
-
-class SACEncoder(nn.Module):
-    block_type: str
-    num_blocks: int
-    hidden_dim: int
-    dtype: Any
-
-    @nn.compact
     def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
-        if self.block_type == "mlp":
-            x = MLPBlock(self.hidden_dim, dtype=self.dtype)(x)
-
-        elif self.block_type == "residual":
-            x = nn.Dense(
-                self.hidden_dim, kernel_init=orthogonal_init(1), dtype=self.dtype
-            )(x)
-            for _ in range(self.num_blocks):
-                x = ResidualBlock(self.hidden_dim, dtype=self.dtype)(x)
-            x = nn.LayerNorm(dtype=self.dtype)(x)
-
+        for layer in self.layers:
+            x = layer(x)
         return x
 
 
-class SACActor(nn.Module):
+class SACActor(nnx.Module):
     block_type: str
     num_blocks: int
     hidden_dim: int
     action_dim: int
     dtype: Any
 
-    def setup(self):
+    def __init__(self, block_type: str, num_blocks: int, hidden_dim: int, action_dim: int, dtype: Any = jnp.float32, *, rngs: nnx.Rngs):
         self.encoder = SACEncoder(
-            block_type=self.block_type,
-            num_blocks=self.num_blocks,
-            hidden_dim=self.hidden_dim,
-            dtype=self.dtype,
+            block_type=block_type,
+            num_blocks=num_blocks,
+            hidden_dim=hidden_dim,
+            dtype=dtype,
+            rngs=rngs
         )
-        self.predictor = NormalTanhPolicy(self.action_dim, dtype=self.dtype)
+        self.dtype = dtype
+        self.predictor = NormalTanhPolicy(action_dim, dtype=dtype, rngs=rngs)
 
     def __call__(
         self,
         observations: jnp.ndarray,
         temperature: float = 1.0,
-    ) -> tfd.Distribution:
+    ) -> tfp.distributions.Distribution:
         observations = convert_element_type(observations, self.dtype)
         z = self.encoder(observations)
         dist = self.predictor(z, temperature)
         return dist
 
 
-class SACCritic(nn.Module):
-    block_type: str
-    num_blocks: int
-    hidden_dim: int
-    dtype: Any
-
-    def setup(self):
+class SACCritic(nnx.Module):
+    def __init__(self, block_type: str, num_blocks: int, hidden_dim: int, dtype: Any = jnp.float32, *, rngs: nnx.Rngs):
         self.encoder = SACEncoder(
-            block_type=self.block_type,
-            num_blocks=self.num_blocks,
-            hidden_dim=self.hidden_dim,
-            dtype=self.dtype,
+            block_type=block_type,
+            num_blocks=num_blocks,
+            hidden_dim=hidden_dim,
+            dtype=dtype,
+            rngs=rngs
         )
-        self.predictor = LinearCritic()
+        self.dtype = dtype
+        self.predictor = LinearCritic(din=hidden_dim, dtype=dtype, rngs=rngs)
 
     def __call__(
         self,
@@ -90,53 +82,37 @@ class SACCritic(nn.Module):
         return q
 
 
-class SACClippedDoubleCritic(nn.Module):
+class SACClippedDoubleCritic(nnx.Module):
     """
     Vectorized Double-Q for Clipped Double Q-learning.
     https://arxiv.org/pdf/1802.09477v3
     """
 
-    block_type: str
-    num_blocks: int
-    hidden_dim: int
-    dtype: Any
-
-    num_qs: int = 2
-
-    @nn.compact
+    def __init__(self, block_type: str, num_blocks: int, hidden_dim: int, dtype: Any = jnp.float32, num_qs: int = 2, *, rngs: nnx.Rngs):
+        #state_axes = nnx.StateAxes({nnx.Param: 0, nnx.Rng: 0})
+        VmapCritic =nnx.split_rngs(nnx.vmap(
+            SACCritic,
+            in_axes=None,
+            out_axes=0,
+            axis_size=num_qs
+        ), splits=num_qs) #Question: why VMAP two critics ?
+        self.critics = VmapCritic(
+            block_type=block_type,
+            num_blocks=num_blocks,
+            hidden_dim=hidden_dim,
+            dtype=dtype,
+            rngs=rngs
+        )
     def __call__(
         self,
         observations: jnp.ndarray,
         actions: jnp.ndarray,
     ) -> jnp.ndarray:
-        VmapCritic = nn.vmap(
-            SACCritic,
-            variable_axes={"params": 0},
-            split_rngs={"params": True},
-            in_axes=None,
-            out_axes=0,
-            axis_size=self.num_qs,
-        )
-
-        qs = VmapCritic(
-            block_type=self.block_type,
-            num_blocks=self.num_blocks,
-            hidden_dim=self.hidden_dim,
-            dtype=self.dtype,
-        )(observations, actions)
-
-        return qs
+        return self.critics(observations, actions)
 
 
-class SACTemperature(nn.Module):
-    initial_value: float = 1.0
-
-    @nn.compact
+class SACTemperature(nnx.Module):
+    def __init__(self, initial_value: float = 1.0):
+        self.log_temp = nnx.Param(name="log_temp",value=jnp.full(shape=(), fill_value=jnp.log(initial_value)))
     def __call__(self) -> jnp.ndarray:
-        log_temp = self.param(
-            name="log_temp",
-            init_fn=lambda key: jnp.full(
-                shape=(), fill_value=jnp.log(self.initial_value)
-            ),
-        )
-        return jnp.exp(log_temp)
+        return jnp.exp(self.log_temp)
