@@ -11,16 +11,16 @@ from scale_rl.networks.policies import NormalTanhPolicy
 from scale_rl.networks.utils import orthogonal_init
 
 class SACEncoder(nnx.Module):
-    def __init__(self, block_type: str, num_blocks: int, hidden_dim: int, dtype: Any = jnp.float32, *, rngs: nnx.Rngs):
+    def __init__(self, block_type: str, num_blocks: int, din: int, dout: int, dtype: Any = jnp.float32, *, rngs: nnx.Rngs):
         if block_type == "mlp":
             self.layers = [
-                MLPBlock(hidden_dim, dtype=dtype, rngs=rngs)
+                MLPBlock(din, dout, dtype=dtype, rngs=rngs)
             ]
         else:
             self.layers = [
-                nnx.Linear(hidden_dim, dtype=dtype, rngs=rngs),
-                *[ResidualBlock(hidden_dim, dtype=dtype, rngs=rngs) for _ in range(num_blocks)],
-                nnx.LayerNorm(dtype=dtype, rngs=rngs)
+                nnx.Linear(din, dout, dtype=dtype, rngs=rngs),
+                *[ResidualBlock(dout, dout, dtype=dtype, rngs=rngs) for _ in range(num_blocks)],
+                nnx.LayerNorm(dout,dtype=dtype, rngs=rngs)
             ]
 
     def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
@@ -36,16 +36,17 @@ class SACActor(nnx.Module):
     action_dim: int
     dtype: Any
 
-    def __init__(self, block_type: str, num_blocks: int, hidden_dim: int, action_dim: int, dtype: Any = jnp.float32, *, rngs: nnx.Rngs):
+    def __init__(self, block_type: str, num_blocks: int, din: int, dout: int, action_dim: int, dtype: Any = jnp.float32, *, rngs: nnx.Rngs):
         self.encoder = SACEncoder(
             block_type=block_type,
             num_blocks=num_blocks,
-            hidden_dim=hidden_dim,
+            din=din,
+            dout=dout,
             dtype=dtype,
             rngs=rngs
         )
         self.dtype = dtype
-        self.predictor = NormalTanhPolicy(action_dim, dtype=dtype, rngs=rngs)
+        self.predictor = NormalTanhPolicy(dout, action_dim, dtype=dtype, rngs=rngs)
 
     def __call__(
         self,
@@ -59,16 +60,17 @@ class SACActor(nnx.Module):
 
 
 class SACCritic(nnx.Module):
-    def __init__(self, block_type: str, num_blocks: int, hidden_dim: int, dtype: Any = jnp.float32, *, rngs: nnx.Rngs):
+    def __init__(self, block_type: str, num_blocks: int, din: int, dout: int, dtype: Any = jnp.float32, *, rngs: nnx.Rngs):
         self.encoder = SACEncoder(
             block_type=block_type,
             num_blocks=num_blocks,
-            hidden_dim=hidden_dim,
+            din=din,
+            dout=dout,
             dtype=dtype,
             rngs=rngs
         )
         self.dtype = dtype
-        self.predictor = LinearCritic(din=hidden_dim, dtype=dtype, rngs=rngs)
+        self.predictor = LinearCritic(dout, dtype=dtype, rngs=rngs)
 
     def __call__(
         self,
@@ -88,7 +90,7 @@ class SACClippedDoubleCritic(nnx.Module):
     https://arxiv.org/pdf/1802.09477v3
     """
 
-    def __init__(self, block_type: str, num_blocks: int, hidden_dim: int, dtype: Any = jnp.float32, num_qs: int = 2, *, rngs: nnx.Rngs):
+    def __init__(self, block_type: str, num_blocks: int, din: int, dout: int, dtype: Any = jnp.float32, num_qs: int = 2, *, rngs: nnx.Rngs):
         #state_axes = nnx.StateAxes({nnx.Param: 0, nnx.Rng: 0})
         VmapCritic =nnx.split_rngs(nnx.vmap(
             SACCritic,
@@ -99,7 +101,8 @@ class SACClippedDoubleCritic(nnx.Module):
         self.critics = VmapCritic(
             block_type=block_type,
             num_blocks=num_blocks,
-            hidden_dim=hidden_dim,
+            din=din,
+            dout=dout,
             dtype=dtype,
             rngs=rngs
         )

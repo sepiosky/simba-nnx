@@ -90,7 +90,8 @@ def _init_sac_networks(
         model=SACActor(
             block_type=cfg.actor_block_type,
             num_blocks=cfg.actor_num_blocks,
-            hidden_dim=cfg.actor_hidden_dim,
+            din=observation_dim,
+            dout=cfg.actor_hidden_dim,
             action_dim=action_dim,
             dtype=compute_dtype,
             rngs=nnx.Rngs(actor_key)
@@ -106,14 +107,16 @@ def _init_sac_networks(
         critic_network_def = SACClippedDoubleCritic(
             block_type=cfg.critic_block_type,
             num_blocks=cfg.critic_num_blocks,
-            hidden_dim=cfg.critic_hidden_dim,
+            din=observation_dim,
+            dout=cfg.critic_hidden_dim,
             dtype=compute_dtype,
             rngs=nnx.Rngs(critic_key)
         )
         target_network_def = SACClippedDoubleCritic(
             block_type=cfg.critic_block_type,
             num_blocks=cfg.critic_num_blocks,
-            hidden_dim=cfg.critic_hidden_dim,
+            din=observation_dim,
+            dout=cfg.critic_hidden_dim,
             dtype=compute_dtype,
             rngs=nnx.Rngs(critic_key)
         )
@@ -121,14 +124,16 @@ def _init_sac_networks(
         critic_network_def = SACCritic(
             block_type=cfg.critic_block_type,
             num_blocks=cfg.critic_num_blocks,
-            hidden_dim=cfg.critic_hidden_dim,
+            din=observation_dim,
+            dout=cfg.critic_hidden_dim,
             dtype=compute_dtype,
             rngs=nnx.Rngs(critic_key)
         )
         target_network_def = SACCritic(
             block_type=cfg.critic_block_type,
             num_blocks=cfg.critic_num_blocks,
-            hidden_dim=cfg.critic_hidden_dim,
+            din=observation_dim,
+            dout=cfg.critic_hidden_dim,
             dtype=compute_dtype,
             rngs=nnx.Rngs(critic_key)
         )
@@ -149,7 +154,7 @@ def _init_sac_networks(
     )
 
     temperature = Trainer.create(
-        model=SACTemperature(cfg.temp_initial_value, nnx.Rngs(temp_key)),
+        model=SACTemperature(cfg.temp_initial_value), #nnx.Rngs(temp_key) not needed
         tx=optax.adamw(
             learning_rate=cfg.temp_learning_rate,
             weight_decay=cfg.temp_weight_decay,

@@ -14,6 +14,7 @@ class NormalTanhPolicy(nnx.Module):
 
     def __init__(
         self,
+        observation_dim: int,
         action_dim: int,
         state_dependent_std: bool = True,
         log_std_min: float = -10.0,
@@ -22,8 +23,8 @@ class NormalTanhPolicy(nnx.Module):
         *,
         rngs: nnx.Rngs,
     ):
-        self.means = nnx.Linear(action_dim, dtype=dtype, rngs=rngs)
-        self.log_stds = nnx.Linear(action_dim, dtype=dtype, rngs=rngs) if state_dependent_std else nnx.Parameter(jnp.zeros(action_dim), dtype=dtype)
+        self.means = nnx.Linear(observation_dim, action_dim, dtype=dtype, rngs=rngs)
+        self.log_stds = nnx.Linear(observation_dim, action_dim, dtype=dtype, rngs=rngs) if state_dependent_std else nnx.Parameter(jnp.zeros(action_dim), dtype=dtype)
         self.log_stds_min = log_std_min
         self.log_stds_max = log_std_max
 
@@ -52,10 +53,9 @@ class NormalTanhPolicy(nnx.Module):
 
 
 class TanhPolicy(nnx.Module):
-    def __init__(self, action_dim: int, dtype: int = jnp.float32, *, rngs: nnx.Rngs):
-        self.linear = nnx.Linear(action_dim, dtype=dtype, rngs=rngs)
+    def __init__(self, observation_dim: int, action_dim: int, dtype: int = jnp.float32, *, rngs: nnx.Rngs):
+        self.linear = nnx.Linear(observation_dim, action_dim, dtype=dtype, rngs=rngs)
 
-    @nnx.compact
     def __call__(
         self,
         inputs: jnp.ndarray,
